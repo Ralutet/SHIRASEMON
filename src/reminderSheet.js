@@ -3,6 +3,21 @@
  */
 
 /**
+ * 記録用シートを、ほかの処理と順番に使う（設定・停止と送信が同時に書き換えないため）
+ * @param {function(): *} fn 順番が来たら行う処理
+ * @return {*} fn の戻り値
+ */
+function withSheetLock(fn) {
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(LOCK_TIMEOUT_MS)) throw new Error('帳面が塞がっておる故、しばし待たれよ。');
+    try {
+        return fn();
+    } finally {
+        lock.releaseLock();
+    }
+}
+
+/**
  * 記録用シートを開く
  * @return {GoogleAppsScript.Spreadsheet.Sheet}
  */
@@ -83,4 +98,45 @@ function setReminderStatus(sheet, rowNumber, status) {
  */
 function updateReminderSchedule(sheet, rowNumber, nextTime, count) {
     sheet.getRange(rowNumber, COL.NEXT_TIME + 1, 1, 2).setValues([["'" + nextTime, count]]);
+}
+
+/**
+ * 対応済みの行を消す（下の行から消し、上の行の行番号がずれないようにする）
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet 記録用シート
+ * @param {Array<{rowNumber: number, values: Array}>} rows readReminderRows で読んだ行
+ */
+function deleteDoneReminders(sheet, rows) {
+    rows
+        .filter(row => row.values[COL.STATUS] === STATUS.DONE)
+        .reverse()
+        .forEach(row => sheet.deleteRow(row.rowNumber));
+}
+
+// ---------------------------------------------------------------------------
+// 次に確かめる時刻（NEXT_CHECK_PROP）
+// ---------------------------------------------------------------------------
+
+/**
+ * 次にシートを確かめる時刻を読む
+ * @return {number} UNIX秒。控えが無ければ0（すぐに確かめる）
+ */
+function getNextCheckTime() {
+    return Number(PropertiesService.getScriptProperties().getProperty(NEXT_CHECK_PROP)) || 0;
+}
+
+/**
+ * 次にシートを確かめる時刻を控える
+ * @param {number} time UNIX秒
+ */
+function setNextCheckTime(time) {
+    PropertiesService.getScriptProperties().setProperty(NEXT_CHECK_PROP, String(time));
+}
+
+/**
+ * 新しいリマインダーの時刻が、控えている時刻より早ければ、控えを早める
+ * @param {number} time 新しいリマインダーの最初の時刻（UNIX秒）
+ */
+function advanceNextCheckTime(time) {
+    const nextCheckTime = getNextCheckTime();
+    if (nextCheckTime && time < nextCheckTime) setNextCheckTime(time);
 }

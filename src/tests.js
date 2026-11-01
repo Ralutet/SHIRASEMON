@@ -44,6 +44,7 @@ function testHelpers() {
         ['送信が遅れても予定はずれない', calcNextTime(28800, 24, 28800 + 480), 28800 + 86400],
         ['止まっていた分は飛ばす', calcNextTime(0, 1, 3600 * 5 + 10), 3600 * 6],
         ['48時間は2日', describeInterval(48), '2 日'],
+        ['36時間は日に丸めない', describeInterval(36), '36 時間'],
         ['0.5時間は30分', describeInterval(0.5), '30 分'],
         ['時差なしは日本時間', parseStartTime('2026-08-02T09:00:00'), parseStartTime('2026-08-02T09:00:00+09:00')],
         ['読めない日時はnull', parseStartTime('あした'), null],

@@ -120,15 +120,6 @@ function handleMention(event) {
  * @param {{interval_hours: number|null, content: string|null, start_time: string|null}} interpreted 読み取った中身
  */
 function registerReminder(event, text, interpreted) {
-    const threadTs = event.thread_ts || event.ts;
-    const sheet = getReminderSheet();
-
-    // 同じスレッドで既にリマインド中なら、重ねて設定しない
-    if (findActiveReminder(sheet, threadTs)) {
-        postReply(event, 'この場においては、既に報せの務めが設定されております。');
-        return;
-    }
-
     // 間隔が読み取れなければ、聞き返す
     const intervalHours = Number(interpreted.interval_hours);
     if (!(intervalHours > 0)) {
@@ -142,24 +133,20 @@ function registerReminder(event, text, interpreted) {
     const hasStartTime = startTime !== null && startTime > now;
     const nextTime = hasStartTime ? startTime : Math.floor(now + intervalHours * 60 * 60);
 
-    // シートに書き込む
-    const ccIds = extractUserIds(text);
-    appendReminder(sheet, {
-        ts: event.ts,
-        postedAt: formatUnixTime(event.ts, 'yyyy/MM/dd HH:mm:ss'),
-        userId: event.user,
-        userName: getUserRealName(event.user),
-        ccIds: ccIds.join(','),
-        ccNames: ccIds.map(id => getUserRealName(id) || '不明なユーザー').join(','),
-        text: text,
-        channelId: event.channel,
-        channelName: getChannelName(event.channel),
-        threadTs: threadTs,
-        permalink: slackPermalink(event),
-        intervalHours: intervalHours,
-        nextTime: nextTime,
-        content: interpreted.content,
+    // シートに書き込む（同じスレッドで既にリマインド中なら、重ねて設定しない）
+    // 名前を調べるのは Slack を呼んで時間がかかるので、シートの順番待ちの前に済ませる
+    const record = buildReminderRecord(event, text, interpreted, intervalHours, nextTime);
+    const registered = withSheetLock(() => {
+        const sheet = getReminderSheet();
+        if (findActiveReminder(sheet, record.threadTs)) return false;
+        appendReminder(sheet, record);
+        advanceNextCheckTime(nextTime);
+        return true;
     });
+    if (!registered) {
+        postReply(event, 'この場においては、既に報せの務めが設定されております。');
+        return;
+    }
 
     // 引き受けたことを返信する（例: 資料を作成する件、11月02日 09時00分 より、 1 日おきに、必ずや報せに参ります。）
     let message = interpreted.content ? `${interpreted.content}件、` : '';
@@ -169,14 +156,50 @@ function registerReminder(event, text, interpreted) {
 }
 
 /**
+ * シートに書き込むリマインダーを組み立てる
+ * @param {object} event Slackのイベントオブジェクト
+ * @param {string} text メンションの本文
+ * @param {{content: string|null}} interpreted 読み取った中身
+ * @param {number} intervalHours 間隔（時間）
+ * @param {number} nextTime 最初にリマインドする時刻（UNIX秒）
+ * @return {object} appendReminder に渡すリマインダー
+ */
+function buildReminderRecord(event, text, interpreted, intervalHours, nextTime) {
+    // 依頼文でメンションされた人を CC にする（依頼した本人は宛先に入るので除く）
+    const ccIds = unique(extractUserIds(text)).filter(id => id !== event.user);
+    return {
+        ts: event.ts,
+        postedAt: formatUnixTime(event.ts, 'yyyy/MM/dd HH:mm:ss'),
+        userId: event.user,
+        userName: getUserRealName(event.user),
+        ccIds: ccIds.join(','),
+        ccNames: ccIds.map(id => getUserRealName(id) || '不明なユーザー').join(','),
+        text: text,
+        channelId: event.channel,
+        channelName: getChannelName(event.channel),
+        threadTs: event.thread_ts || event.ts,
+        permalink: slackPermalink(event),
+        intervalHours: intervalHours,
+        nextTime: nextTime,
+        content: interpreted.content,
+    };
+}
+
+/**
  * スレッドのリマインダーを止め、リマインドの投稿を消す
+ * 送信のトリガーと順番にシートを使う（止めた直後に、リマインドが1通届かないため）。
+ * 止めた行は、次に送信のトリガーがシートを読んだときに消える。
  * @param {object} event Slackのイベントオブジェクト
  */
 function stopReminder(event) {
-    const sheet = getReminderSheet();
-    const reminder = findActiveReminder(sheet, event.thread_ts || event.ts);
-    if (reminder) {
+    const stopped = withSheetLock(() => {
+        const sheet = getReminderSheet();
+        const reminder = findActiveReminder(sheet, event.thread_ts || event.ts);
+        if (!reminder) return false;
         setReminderStatus(sheet, reminder.rowNumber, STATUS.DONE);
+        return true;
+    });
+    if (stopped) {
         postReply(event, '報せの務め、完了いたしました。');
     } else {
         postReply(event, 'この場にて、拙者がお預かりしている報せの務めは見当たりませぬ。');
@@ -219,14 +242,24 @@ function parseStartTime(startTime) {
 }
 
 /**
- * 間隔を言葉にする（例: 48 → "2 日"、3 → "3 時間"、0.5 → "30 分"）
+ * 間隔を言葉にする（例: 48 → "2 日"、36 → "36 時間"、3 → "3 時間"、0.5 → "30 分"）
+ * 日で割り切れるときだけ日で表す（36時間を「2 日」と丸めないため）。
  * @param {number} intervalHours 間隔（時間）
  * @return {string}
  */
 function describeInterval(intervalHours) {
-    if (intervalHours >= 24) return `${Math.round(intervalHours / 24)} 日`;
-    if (intervalHours >= 1) return `${intervalHours} 時間`;
+    if (intervalHours >= 24 && intervalHours % 24 === 0) return `${intervalHours / 24} 日`;
+    if (intervalHours >= 1) return `${Math.round(intervalHours * 100) / 100} 時間`;
     return `${Math.round(intervalHours * 60)} 分`;
+}
+
+/**
+ * 重複を除いた配列を返す（並び順は最初に出てきた順）
+ * @param {Array} list
+ * @return {Array}
+ */
+function unique(list) {
+    return list.filter((item, i) => list.indexOf(item) === i);
 }
 
 /**
