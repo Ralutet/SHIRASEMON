@@ -49,8 +49,8 @@ function sendReminder(sheet, row, now) {
         postToThread(channelId, threadTs, message, { angry: reminder.angry });
 
         // 次の時刻と回数を書き換える
-        const intervalSec = Number(values[COL.INTERVAL_HOURS]) * 60 * 60;
-        updateReminderSchedule(sheet, row.rowNumber, Math.floor(now + intervalSec), count + 1);
+        const nextTime = calcNextTime(Number(values[COL.NEXT_TIME]), Number(values[COL.INTERVAL_HOURS]), now);
+        updateReminderSchedule(sheet, row.rowNumber, nextTime, count + 1);
     } catch (e) {
         console.error(e.stack || e.message);
 
@@ -65,6 +65,24 @@ function sendReminder(sheet, row, now) {
             console.error('失敗の通知にも失敗しました: ' + err.message);
         }
     }
+}
+
+/**
+ * 次にリマインドする時刻を決める
+ * 送った時刻ではなく、予定していた時刻に間隔を足す（トリガーの遅れが積み重なって、8:00 が 8:08 にずれていかないため）。
+ * 止まっていた間などで足しても過去になるなら、未来になるまで間隔を足す（溜まった分をまとめて送らないため）。
+ * @param {number} scheduledTime 予定していた時刻（UNIX秒）
+ * @param {number} intervalHours 間隔（時間）
+ * @param {number} now 現在時刻（UNIX秒）
+ * @return {number} 次の時刻（UNIX秒）
+ */
+function calcNextTime(scheduledTime, intervalHours, now) {
+    const intervalSec = Math.max(Math.round(intervalHours * 60 * 60), 60);
+    let nextTime = scheduledTime + intervalSec;
+    if (nextTime <= now) {
+        nextTime += Math.ceil((now - nextTime + 1) / intervalSec) * intervalSec;
+    }
+    return nextTime;
 }
 
 /**

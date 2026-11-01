@@ -41,6 +41,8 @@ function testHelpers() {
         ['いつもの文面', buildReminderMessage(0, '資料を作成する').text.startsWith('差し出がましいとは存じますが、資料を作成する件'), true],
         ['5回目は怒る', buildReminderMessage(5, null).angry, true],
         ['26回目は愛想を尽かす', buildReminderMessage(26, '資料を作成する').text, GIVE_UP_MESSAGE],
+        ['送信が遅れても予定はずれない', calcNextTime(28800, 24, 28800 + 480), 28800 + 86400],
+        ['止まっていた分は飛ばす', calcNextTime(0, 1, 3600 * 5 + 10), 3600 * 6],
         ['48時間は2日', describeInterval(48), '2 日'],
         ['0.5時間は30分', describeInterval(0.5), '30 分'],
         ['時差なしは日本時間', parseStartTime('2026-08-02T09:00:00'), parseStartTime('2026-08-02T09:00:00+09:00')],
