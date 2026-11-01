@@ -36,7 +36,12 @@ function doPost(e) {
     const event = contents.event;
     if (contents.type === 'event_callback' && event && shouldHandleEvent(event)) {
         try {
-            if (!isProcessed(event.event_ts || event.ts)) handleMention(event);
+            if (!isProcessed(event.event_ts || event.ts)) {
+                // 投稿から受け取るまでと、扱い終えるまでの時間をログに残す（反応の遅さを調べるため）
+                console.log(`投稿から受け取るまで: ${Date.now() - parseFloat(event.ts) * 1000}ms`);
+                handleMention(event);
+                console.log(`投稿から扱い終えるまで: ${Date.now() - parseFloat(event.ts) * 1000}ms`);
+            }
         } catch (err) {
             notifyFailure(event, err);
         }
@@ -86,7 +91,8 @@ function handleMention(event) {
     const text = removeBotMention(event.text);
 
     // 1. 命令の言葉だけなら、そのまま扱う
-    const command = text.toLowerCase();
+    // （メンションを全て除いて比べる。SLACK_BOT_ID が食い違っていても、Gemini に回して遅くならないように）
+    const command = text.replace(/<@[A-Z0-9]+>/g, '').trim().toLowerCase();
     if (COMMANDS.ERASE.indexOf(command) !== -1) {
         cleanUpThread(event);
         return;

@@ -9,7 +9,9 @@
  */
 function withSheetLock(fn) {
     const lock = LockService.getScriptLock();
+    const waitStartedAt = Date.now();
     if (!lock.tryLock(LOCK_TIMEOUT_MS)) throw new Error('帳面が塞がっておる故、しばし待たれよ。');
+    console.log(`シートの順番待ち: ${Date.now() - waitStartedAt}ms`);
     try {
         return fn();
     } finally {
